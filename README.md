@@ -70,6 +70,8 @@ Restores your previous `statusLine` setting if one existed.
 
 After March 27 the promo segment disappears and the statusline shows session info only.
 
+More info: [https://support.claude.com/en/articles/14063676-claude-march-2026-usage-promotion](https://support.claude.com/en/articles/14063676-claude-march-2026-usage-promotion)
+
 ---
 
 ## Requirements
