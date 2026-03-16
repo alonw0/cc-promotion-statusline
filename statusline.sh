@@ -11,6 +11,10 @@ from datetime import datetime, timezone, timedelta
 
 data = json.loads(sys.argv[1]) if sys.argv[1:] else {}
 
+# Version
+version = data.get("version", "")
+version_str = f"v{version}" if version else ""
+
 # Model name
 model_raw = (data.get("model") or {}).get("display_name", "")
 if "Sonnet" in model_raw:
@@ -26,11 +30,28 @@ else:
 ctx_pct = int((data.get("context_window") or {}).get("used_percentage") or 0)
 
 # Cost
-cost_val = (data.get("cost") or {}).get("total_cost_usd")
-if cost_val and cost_val > 0:
-    cost = f"${cost_val:.3f}"
+cost_obj = data.get("cost") or {}
+cost_val = cost_obj.get("total_cost_usd")
+cost = f"${cost_val:.3f}" if cost_val and cost_val > 0 else ""
+
+# Session lines edited by Claude
+sess_added   = int(cost_obj.get("total_lines_added") or 0)
+sess_removed = int(cost_obj.get("total_lines_removed") or 0)
+
+# Session duration
+duration_ms = cost_obj.get("total_duration_ms") or 0
+duration_s  = int(duration_ms / 1000)
+if duration_s >= 3600:
+    duration_str = f"{duration_s // 3600}h{(duration_s % 3600) // 60}m"
+elif duration_s >= 60:
+    duration_str = f"{duration_s // 60}m{duration_s % 60}s"
+elif duration_s > 0:
+    duration_str = f"{duration_s}s"
 else:
-    cost = ""
+    duration_str = ""
+
+# Vim mode
+vim_mode = (data.get("vim") or {}).get("mode", "")
 
 # ── Promotion time logic ────────────────────────────────────────────────────
 PROMO_END_UTC = datetime(2026, 3, 28, 6, 59, 59, tzinfo=timezone.utc)
@@ -55,7 +76,6 @@ else:
 
     if is_weekend:
         promo_mode = "2X"
-        # Next transition: Monday 12:00 UTC
         days_to_mon = (7 - now_utc.weekday()) % 7 or 7
         next_utc = (now_utc + timedelta(days=days_to_mon)).replace(
             hour=PEAK_START_H, minute=0, second=0, microsecond=0)
@@ -69,7 +89,6 @@ else:
         next_utc = now_utc.replace(hour=PEAK_START_H, minute=0, second=0, microsecond=0)
         if next_utc <= now_utc:
             next_utc += timedelta(days=1)
-        # Skip weekends
         while next_utc.weekday() >= 5:
             next_utc += timedelta(days=1)
 
@@ -77,9 +96,14 @@ else:
     next_local   = (next_utc.replace(tzinfo=None) + local_offset).strftime("%H:%M")
     promo_next   = next_local
 
+print(f"VERSION='{version_str}'")
 print(f"MODEL='{model}'")
 print(f"CTX_PCT={ctx_pct}")
 print(f"COST='{cost}'")
+print(f"SESS_ADDED={sess_added}")
+print(f"SESS_REMOVED={sess_removed}")
+print(f"DURATION='{duration_str}'")
+print(f"VIM_MODE='{vim_mode}'")
 print(f"CLOCK='{clock}'")
 print(f"PROMO_MODE='{promo_mode}'")
 print(f"PROMO_NEXT='{promo_next}'")
@@ -110,14 +134,29 @@ YELLOW='\033[33m'
 RED='\033[31m'
 GRAY='\033[90m'
 CYAN='\033[36m'
+PURPLE='\033[35m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-# ── Format each component ───────────────────────────────────────────────────
-# Model
-model_str="${CYAN}[${MODEL}]${RESET}"
+# ── Line 1 components ────────────────────────────────────────────────────────
 
-# Context bar with color based on percentage
+# Model + version
+if [[ -n "$VERSION" ]]; then
+    model_str="${CYAN}[${MODEL}]${GRAY}·${VERSION}${RESET}"
+else
+    model_str="${CYAN}[${MODEL}]${RESET}"
+fi
+
+# Vim mode badge (before context bar if active)
+if [[ "$VIM_MODE" == "NORMAL" ]]; then
+    vim_str="${YELLOW}${BOLD} N ${RESET}"
+elif [[ "$VIM_MODE" == "INSERT" ]]; then
+    vim_str="${GREEN}${BOLD} I ${RESET}"
+else
+    vim_str=""
+fi
+
+# Context bar
 CTX_PCT=${CTX_PCT:-0}
 BAR=$(build_bar "$CTX_PCT")
 if (( CTX_PCT < 50 )); then
@@ -129,54 +168,55 @@ else
 fi
 ctx_str="${bar_color}${BAR}${RESET} ${CTX_PCT}%"
 
-# Cost (hidden if empty)
-if [[ -n "$COST" ]]; then
-    cost_str="${GRAY}${COST}${RESET}"
-else
-    cost_str=""
-fi
+# Cost
+[[ -n "$COST" ]] && cost_str="${GRAY}${COST}${RESET}" || cost_str=""
 
 # Clock
 clock_str="🕐 ${CLOCK}"
 
-# Promo segment
+# Promo
 case "$PROMO_MODE" in
-    2X)
-        promo_str="${GREEN}${BOLD}⚡ 2× ON 🟢 →${PROMO_NEXT} · ${PROMO_DAYS}d left${RESET}"
-        ;;
-    PEAK)
-        promo_str="${GRAY}⏸ 1× OFF 🔴 peak until ${PROMO_NEXT} · ${PROMO_DAYS}d left${RESET}"
-        ;;
-    OFF|*)
-        promo_str=""
-        ;;
+    2X)   promo_str="${GREEN}${BOLD}⚡ 2× ON 🟢 →${PROMO_NEXT} · ${PROMO_DAYS}d left${RESET}" ;;
+    PEAK) promo_str="${GRAY}⏸ 1× OFF 🔴 peak until ${PROMO_NEXT} · ${PROMO_DAYS}d left${RESET}" ;;
+    *)    promo_str="" ;;
 esac
 
-# ── Git info (line 2) ────────────────────────────────────────────────────────
-PURPLE='\033[35m'
+# ── Line 2 components ────────────────────────────────────────────────────────
 
+# Git branch + working-tree diff
 git_branch=$(git branch --show-current 2>/dev/null)
 if [[ -n "$git_branch" ]]; then
-    # Staged + unstaged diff stats combined
-    added=$(git diff --numstat HEAD 2>/dev/null | awk '{a+=$1} END {print a+0}')
-    removed=$(git diff --numstat HEAD 2>/dev/null | awk '{a+=$2} END {print a+0}')
-
-    branch_str="${PURPLE} ${git_branch}${RESET}"
-    if (( added > 0 || removed > 0 )); then
-        diff_str="${GREEN}+${added}${RESET} ${RED}-${removed}${RESET}"
-        git_line="${branch_str}  ${diff_str}"
-    else
-        git_line="${branch_str}"
+    git_added=$(git diff --numstat HEAD 2>/dev/null | awk '{a+=$1} END {print a+0}')
+    git_removed=$(git diff --numstat HEAD 2>/dev/null | awk '{a+=$2} END {print a+0}')
+    branch_str="${PURPLE}🌿 ${git_branch}${RESET}"
+    if (( git_added > 0 || git_removed > 0 )); then
+        branch_str="${branch_str}  ${GREEN}+${git_added}${RESET} ${RED}-${git_removed}${RESET}"
     fi
 else
-    git_line=""
+    branch_str="${GRAY}🌿 none${RESET}"
 fi
 
-# ── Assemble line ───────────────────────────────────────────────────────────
-line="${model_str} ${ctx_str}"
-[[ -n "$cost_str" ]] && line="${line} | ${cost_str}"
-line="${line} | ${clock_str}"
-[[ -n "$promo_str" ]] && line="${line} | ${promo_str}"
+# Session lines edited by Claude
+if (( SESS_ADDED > 0 || SESS_REMOVED > 0 )); then
+    sess_str="${GRAY}✍️  session ${GREEN}+${SESS_ADDED}${RESET}${GRAY}/${RED}-${SESS_REMOVED}${RESET}"
+else
+    sess_str=""
+fi
 
-printf "%b\n" "$line"
-[[ -n "$git_line" ]] && printf "%b\n" "$git_line"
+# Session duration
+[[ -n "$DURATION" ]] && dur_str="${GRAY}⏱ ${DURATION}${RESET}" || dur_str=""
+
+# ── Assemble ─────────────────────────────────────────────────────────────────
+line1="${model_str}"
+[[ -n "$vim_str" ]] && line1="${line1} ${vim_str}"
+line1="${line1} ${ctx_str}"
+[[ -n "$cost_str" ]] && line1="${line1} | ${cost_str}"
+line1="${line1} | ${clock_str}"
+[[ -n "$promo_str" ]] && line1="${line1} | ${promo_str}"
+
+line2="${branch_str}"
+[[ -n "$sess_str" ]] && line2="${line2}  ${sess_str}"
+[[ -n "$dur_str"  ]] && line2="${line2}  ${dur_str}"
+
+printf "%b\n" "$line1"
+printf "%b\n" "$line2"
