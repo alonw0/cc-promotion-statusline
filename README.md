@@ -2,7 +2,7 @@
 
 A Claude Code statusline for the **March 2026 doubled-usage promotion** — shows whether you're currently getting 2× usage or not, plus useful session info.
 
-![statusline preview](https://i.imgur.com/placeholder.png)
+![statusline preview](https://github.com/user-attachments/assets/c767694a-2024-4075-9d19-d454ef470bc3)
 
 ```
 [Sonnet 4.6]·v1.2.0  ▓▓░░░░░░░░ 23% | $0.042 | 🕐 21:14 | ⚡ 2× ON 🟢 →00:00 · 12d left
